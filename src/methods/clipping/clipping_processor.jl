@@ -75,7 +75,7 @@ function _build_a_list(::Type{T}, poly_a, poly_b) where T
             end
             int_pt, fracs = _intersection_point(T, (a_pt1, a_pt2), (b_pt1, b_pt2))
             # if no intersection point, skip this edge
-            if !isnothing(int_pt) && (0 ≤ fracs[1] ≤ 1) && (0 ≤ fracs[2] ≤ 1)
+            if !isnothing(int_pt) && all(0 .≤ fracs .≤ 1)
                 # Set neighbor field to b edge (j-1) to keep track of intersection
                 new_intr = PolyNode(intr_count, int_pt, true, j - 1, false, fracs)
                 a_count += 1
@@ -178,7 +178,7 @@ function _flag_ent_exit!(poly, pt_list)
 end
 
 #=
-    _trace_polynodes(a_list, b_list, a_idx_list, f_step)::Vector{GI.Polygon}
+    _trace_polynodes(::Type{T}, a_list, b_list, a_idx_list, f_step)::Vector{GI.Polygon}
 
 This function takes the outputs of _build_ab_list and traces the lists to determine which
 polygons are formed as described in Greiner and Hormann. The function f_step determines in
@@ -192,13 +192,12 @@ false if we are tracing b_list. The functions used for each clipping operation a
 
 A list of GeoInterface polygons is returned from this function. 
 =#
-function _trace_polynodes(a_list, b_list, a_idx_list, f_step)
+function _trace_polynodes(::Type{T}, a_list, b_list, a_idx_list, f_step) where T
     n_a_pts, n_b_pts = length(a_list), length(b_list)
     n_intr_pts = length(a_idx_list)
-    return_polys = Vector{GI.Polygon}(undef, 0)
+    return_polys = Vector{_get_poly_type(T)}(undef, 0)
     # Keep track of number of processed intersection points
     processed_pts = 0
-
     while processed_pts < n_intr_pts
         curr_list, curr_npoints = a_list, n_a_pts
         on_a_list = true
@@ -245,8 +244,13 @@ function _trace_polynodes(a_list, b_list, a_idx_list, f_step)
         end
         push!(return_polys, GI.Polygon([pt_list]))
     end
-    return return_polys::Vector{GI.Polygon}
+    return return_polys
 end
+
+# Get type of polygons that will be made
+# TODO: Increase type options
+_get_poly_type(::Type{T}) where T =
+    GI.Polygon{false, false, Vector{GI.LinearRing{false, false, Vector{Tuple{T, T}}, Nothing, Nothing}}, Nothing, Nothing}
 
 #=
     _add_holes_to_polys!(::Type{T}, return_polys, hole_iterator)
@@ -282,6 +286,6 @@ function _add_holes_to_polys!(::Type{T}, return_polys, hole_iterator) where T
         n_polys += n_new_per_poly
     end
     # Remove all polygon that were marked for removal
-    filter!(!isnothing, return_polys)::Vector{GI.Polygon}
+    filter!(!isnothing, return_polys)
     return
 end
