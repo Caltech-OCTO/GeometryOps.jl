@@ -10,6 +10,8 @@ struct PolyNode{T <: AbstractFloat}
     neighbor::Int      # If ipt, index of equivalent point in a_list or b_list, else 0
     ent_exit::Bool     # If ipt, true if enter and false if exit, else false
     fracs::Tuple{T,T}  # If ipt, fractions along edges to ipt (a_frac, b_frac), else (0, 0)
+    crossing::Bool     # If ipt, whether or not it represents a "crossing" or "bouncing" of
+                       # polygons
 end
 
 #=
@@ -62,7 +64,7 @@ function _build_a_list(::Type{T}, poly_a, poly_b) where T
             continue
         end
         # Add the first point of the edge to the list of points in a_list
-        new_point = PolyNode(0, a_pt1, false, 0, false, (zero(T), zero(T)))
+        new_point = PolyNode(0, a_pt1, false, 0, false, (zero(T), zero(T)), false)
         a_count += 1
         _add!(a_list, a_count, new_point, n_a_edges)
         # Find intersections with edges of poly_b
@@ -78,7 +80,7 @@ function _build_a_list(::Type{T}, poly_a, poly_b) where T
             # if no intersection point, skip this edge
             if !isnothing(int_pt) && (0 ≤ fracs[1] ≤ 1) && (0 ≤ fracs[2] ≤ 1)
                 # Set neighbor field to b edge (j-1) to keep track of intersection
-                new_intr = PolyNode(intr_count, int_pt, true, j - 1, false, fracs)
+                new_intr = PolyNode(intr_count, int_pt, true, j - 1, false, fracs, false)
                 a_count += 1
                 intr_count += 1
                 _add!(a_list, a_count, new_intr, n_a_edges)
@@ -93,7 +95,7 @@ function _build_a_list(::Type{T}, poly_a, poly_b) where T
             inter_points = @view a_list[(a_count - Δintrs + 1):a_count]
             sort!(inter_points, by = x -> x.fracs[1])
             for (i, p) in enumerate(inter_points)
-                inter_points[i] = PolyNode(prev_counter + i, p.point, p.inter, p.neighbor, p.ent_exit, p.fracs)
+                inter_points[i] = PolyNode(prev_counter + i, p.point, p.inter, p.neighbor, p.ent_exit, p.fracs, false)
             end
         end
     
@@ -136,14 +138,14 @@ function _build_b_list(::Type{T}, a_idx_list, a_list, poly_b) where T
         (i == n_b_edges + 1) && break
         b_count += 1
         pt = (T(GI.x(p)), T(GI.y(p)))
-        b_list[b_count] = PolyNode(0, pt, false, 0, false, (zero(T), zero(T)))
+        b_list[b_count] = PolyNode(0, pt, false, 0, false, (zero(T), zero(T)), false)
         if intr_curr ≤ n_intr_pts
             curr_idx = a_idx_list[intr_curr]
             curr_node = a_list[curr_idx]
             while curr_node.neighbor == i  # Add all intersection points in current edge
                 b_count += 1
-                b_list[b_count] = PolyNode(curr_node.idx, curr_node.point, true, curr_idx, false, curr_node.fracs)
-                a_list[curr_idx] = PolyNode(curr_node.idx, curr_node.point, curr_node.inter, b_count, curr_node.ent_exit, curr_node.fracs)
+                b_list[b_count] = PolyNode(curr_node.idx, curr_node.point, true, curr_idx, false, curr_node.fracs, false)
+                a_list[curr_idx] = PolyNode(curr_node.idx, curr_node.point, curr_node.inter, b_count, curr_node.ent_exit, curr_node.fracs, false)
                 curr_node = a_list[curr_idx]
                 intr_curr += 1
                 intr_curr > n_intr_pts && break
@@ -171,7 +173,7 @@ function _flag_ent_exit!(poly, pt_list)
                 in = true, on = false, out = false
             )
         elseif pt_list[ii].inter
-            pt_list[ii] = PolyNode(pt_list[ii].idx, pt_list[ii].point, pt_list[ii].inter, pt_list[ii].neighbor, status, pt_list[ii].fracs)
+            pt_list[ii] = PolyNode(pt_list[ii].idx, pt_list[ii].point, pt_list[ii].inter, pt_list[ii].neighbor, status, pt_list[ii].fracs,false)
             status = !status
         end
     end
@@ -290,3 +292,68 @@ function _add_holes_to_polys!(::Type{T}, return_polys, hole_iterator) where T
     filter!(!isnothing, return_polys)
     return
 end
+
+function _signed_area_triangle(P, Q, R)
+    return (GI.x(Q)-GI.x(P))*(GI.y(R)-GI.y(P))-(GI.y(Q)-GI.y(P))*(GI.x(R)-GI.x(P))
+end
+
+function _classify_crossing!(a_list, b_list, i)
+    I = a_list[i].point
+    j = a_list[i].neighbor
+    idx = i-1
+    if i-1<1
+        idx = length(a_list)
+    end
+    Q₋ = a_list[idx].point
+    idx = i+1
+    if idx>length(a_list)
+        idx = 1
+    end
+    Q₊ = a_list[idx].point
+    idx = j-1
+    if j-1<1
+        idx = length(b_list)
+    end
+    P₋ = b_list[idx].point
+    idx = j + 1
+    if j+1 > length(b_list)
+        idx = 1
+    end
+    P₊ = b_list[idx].point
+
+    # Check what sides Q- and Q+ are on
+    side_Q₋ = _get_side(Q₋, P₋, I, P₊)
+    side_Q₊ = _get_side(Q₊, P₋, I, P₊)
+    a = a_list[i]
+    b = b_list[j]
+    if side_Q₋ == side_Q₊
+        a_list[i] = PolyNode(a.idx, a.point, a.inter, a.neighbor, a.ent_exit, a.fracs, false)
+        b_list[j] = PolyNode(b.idx, b.point, b.inter, b.neighbor, b.ent_exit, b.fracs, false)
+    else
+        a_list[i] = PolyNode(a.idx, a.point, a.inter, a.neighbor, a.ent_exit, a.fracs, true)
+        b_list[j] = PolyNode(b.idx, b.point, b.inter, b.neighbor, b.ent_exit, b.fracs, true)
+    end
+end
+
+# output 0 means left/straight, 1 means right
+function _get_side(Q, P1, P2, P3)
+    s1 = _signed_area_triangle(Q, P1, P2)
+    s2 = _signed_area_triangle(Q, P2, P3)
+    s3 = _signed_area_triangle(P1, P2, P3)
+
+    if s3 >= 0
+        if (s1 > 0) && (s2 > 0)
+            return 0
+        end
+    else
+        if (s1 > 0) || (s2 > 0)
+            return 1
+        end
+    end
+end
+
+
+
+
+
+
