@@ -3,11 +3,14 @@ l2 = GI.Line([(-1.0, 8.0), (2.0, 11.0)])
 l3 = GI.Line([(-1.0, 6.0), (11.0, 6.0)])
 l4 = GI.Line([(-10.0, -10.0), (-1.0, -1.0)])
 l5 = GI.Line([(-10.0, 5.0), (5.0, 5.0)])
+l6 = GI.Line([(-10.0, -10.0),  (10.0, -10.0)])
+l7 = GI.Line([(-10.0, 10.0),  (20.0, 10.0)])
 r1 = GI.LinearRing([(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)])
 r2 = GI.LinearRing([(2.0, 2.0), (8.0, 2.0), (8.0, 4.0), (2.0, 4.0), (2.0, 2.0)])
 p1 = GI.Polygon([r1])
 p2 = GI.Polygon([r1, r2])
 p3 = GI.Polygon([[(0.0, 0.0), (0.0, 5.0), (2.5, 7.5), (5.0, 5.0), (7.5, 7.5), (10.0, 5.0), (10.0, 0.0), (0.0, 0.0)]])
+p4 = GI.Polygon([[[0.0, 0.0], [10.0, 0.0], [5.0, -10.0], [0.0, 0.0]]])
 
 @testset "Cut Polygon" begin
     # Cut convex polygon
@@ -62,5 +65,11 @@ p3 = GI.Polygon([[(0.0, 0.0), (0.0, 5.0), (2.5, 7.5), (5.0, 5.0), (7.5, 7.5), (1
     cut_polys = GO.cut(p1, l4)
     @test all(GO.equals.(cut_polys, [p1]))
     cut_polys = GO.cut(p1, l5)
+    @test all(GO.equals.(cut_polys, [p1]))
+
+    # Line cuts through just the vertex/edge of polygon
+    cut_polys = GO.cut(p4, l6)
+    @test all(GO.equals.(cut_polys, [p4]))
+    cut_polys = GO.cut(p1, l7)
     @test all(GO.equals.(cut_polys, [p1]))
 end
