@@ -15,6 +15,7 @@ an intersection point (ipt). =#
     fracs::Tuple{T,T} = (0., 0.) # If ipt, fractions along edges to ipt (a_frac, b_frac), else (0, 0)
     endpoint::Bool = false
     endpoint_partner::Int = 0
+    first_in_chain::Bool = false
     # bounce_endpoint::Bool = false
 end
 
@@ -37,6 +38,8 @@ function _build_ab_list(::Type{T}, poly_a, poly_b) where T
     # Flag the entry and exits
     _flag_ent_exit!(GI.LinearRingTrait(), poly_b, a_list)
     _flag_ent_exit!(GI.LinearRingTrait(), poly_a, b_list)
+
+    _classify_crossing_endpoints!(T, a_list, b_list)
 
     return a_list, b_list, a_idx_list
 end
@@ -200,6 +203,62 @@ function _build_b_list(::Type{T}, a_idx_list, a_list, n_b_intrs, poly_b) where T
     return b_list
 end
 
+# This is what needs to be reversed for union/difference
+function _classify_crossing_endpoints!(::Type{T}, a_list, b_list) where T
+    for i in eachindex(a_list)
+        if a_list[i].endpoint && a_list[i].crossing           
+            if a_list[i].ent_exit
+                # Mark last vertex of delayed crossing as crossing
+                # It is already labelled as crossing, so just make other one false
+                if a_list[i].first_in_chain
+                    curr_pt = a_list[i]
+                    j = curr_pt.neighbor
+                    a_list[i] = PolyNode{T}(;
+                        point = curr_pt.point, inter = true, neighbor = curr_pt.neighbor,
+                        crossing = false, fracs = curr_pt.fracs, endpoint = curr_pt.endpoint,
+                        first_in_chain = curr_pt.first_in_chain, endpoint_partner = curr_pt.endpoint_partner
+                    )
+                    curr_pt = b_list[j]
+                    b_list[j] = PolyNode{T}(;
+                        point = curr_pt.point, inter = true, neighbor = curr_pt.neighbor,
+                        crossing = false, fracs = curr_pt.fracs, endpoint = curr_pt.endpoint,
+                        first_in_chain = curr_pt.first_in_chain, endpoint_partner = curr_pt.endpoint_partner
+                    )  
+                end
+            else
+                # Mark first vertex as crossing, but it already is, so make otherone false
+                if !a_list[i].first_in_chain
+                    curr_pt = a_list[i]
+                    j = curr_pt.neighbor
+                    a_list[i] = PolyNode{T}(;
+                        point = curr_pt.point, inter = true, neighbor = curr_pt.neighbor,
+                        crossing = false, fracs = curr_pt.fracs, endpoint = curr_pt.endpoint,
+                        first_in_chain = curr_pt.first_in_chain, endpoint_partner = curr_pt.endpoint_partner
+                    )  
+                    curr_pt = b_list[j]
+                    b_list[j] = PolyNode{T}(;
+                        point = curr_pt.point, inter = true, neighbor = curr_pt.neighbor,
+                        crossing = false, fracs = curr_pt.fracs, endpoint = curr_pt.endpoint,
+                        first_in_chain = curr_pt.first_in_chain, endpoint_partner = curr_pt.endpoint_partner
+                    )
+                end
+            end
+        elseif a_list[i].endpoint
+            # # do what you would do for delayed bounce
+            # # need to check if adjacent edges of P lie inside Q or vice versa
+            # if !a_list[i].first_in_chain
+            #     continue
+            # end
+
+            # npts = length(a_list)
+            # prev_idx_a = i > 1 ? (i - 1) : npts
+            # j = a_list[i].neighbor
+            # prev_idx_b
+            # variable = a_list[next_idx].point IN poly_b || 
+        end
+
+    end
+end
 #=
     _classify_crossing!(T, poly_b, a_list)
 
@@ -214,6 +273,8 @@ function _classify_crossing!(::Type{T}, a_list, b_list) where T
     i = napts
     # keep track of unmatched bouncing chains
     start_chain_edge = unknown
+    start_chain_idx = 0
+    end_chain_idx = 0
     unmatched_end_chain_edge, unmatched_end_chain_idx = unknown, 0
     # loop over list points
     for next_idx in 1:napts
@@ -259,7 +320,7 @@ function _classify_crossing!(::Type{T}, a_list, b_list) where T
                     a_list[start_chain_idx] = PolyNode{T}(;
                         point = start_pt.point, inter = true, neighbor = start_pt.neighbor,
                         crossing = true, fracs = start_pt.fracs,
-                        endpoint = true, endpoint_partner = i
+                        endpoint = true, endpoint_partner = i, first_in_chain = true
                     )
                     start_b_pt = b_list[start_pt.neighbor]
                     b_list[j] = PolyNode{T}(;
@@ -271,7 +332,7 @@ function _classify_crossing!(::Type{T}, a_list, b_list) where T
                     b_list[start_pt.neighbor] = PolyNode{T}(;
                         point = start_b_pt.point, inter = true, neighbor = start_chain_idx,
                         crossing = true, fracs = start_b_pt.fracs,
-                        endpoint = true, endpoint_partner = j
+                        endpoint = true, endpoint_partner = j, first_in_chain = true
                     )
 
                 elseif b_side == start_chain_edge
@@ -289,17 +350,16 @@ function _classify_crossing!(::Type{T}, a_list, b_list) where T
                     a_list[start_chain_idx] = PolyNode{T}(;
                         point = start_pt.point, inter = true, neighbor = start_pt.neighbor,
                         crossing = false, fracs = start_pt.fracs,
-                        endpoint = true, endpoint_partner = i
+                        endpoint = true, endpoint_partner = i, first_in_chain = true
                     )
                     start_b_pt = b_list[start_pt.neighbor]
                     b_list[start_pt.neighbor] = PolyNode{T}(;
                         point = start_b_pt.point, inter = true, neighbor = start_chain_idx,
                         crossing = false, fracs = start_b_pt.fracs,
-                        endpoint = true, endpoint_partner = j
+                        endpoint = true, endpoint_partner = j, first_in_chain = true
                     )
                 end
             # start of overlapping chain
-            # start_chain_idx = unknown
             elseif !a_prev_is_b_prev && !a_prev_is_b_next
                 b_side = a_next_is_b_prev ? b_next_side : b_prev_side
                 start_chain_edge = b_side
@@ -381,13 +441,14 @@ function _flag_ent_exit!(::GI.LinearRingTrait, poly, pt_list)
     start_pt = (pt_list[start_idx].point .+ pt_list[next_idx].point) ./ 2
     status = !_point_filled_curve_orientation(start_pt, poly; in = true, on = false, out = false)
     # Loop over points and mark entry and exit status
-    processed_endpoints = []
+    processed_endpoints = Int[]
     for ii in Iterators.flatten((next_idx:npts, 1:start_idx))
         curr_pt = pt_list[ii]
         if (!curr_pt.crossing && curr_pt.endpoint) || (curr_pt.crossing && !curr_pt.endpoint)
             pt_list[ii] = PolyNode(;
                 point = curr_pt.point, inter = curr_pt.inter, neighbor = curr_pt.neighbor,
-                ent_exit = status, crossing = curr_pt.crossing, fracs = curr_pt.fracs, endpoint = curr_pt.endpoint)
+                ent_exit = status, crossing = curr_pt.crossing, fracs = curr_pt.fracs, endpoint = curr_pt.endpoint,
+                endpoint_partner = curr_pt.endpoint_partner, first_in_chain = curr_pt.first_in_chain)
             status = !status
         elseif curr_pt.crossing && curr_pt.endpoint
             if ii in processed_endpoints
@@ -396,12 +457,12 @@ function _flag_ent_exit!(::GI.LinearRingTrait, poly, pt_list)
             pt_list[ii] = PolyNode(;
                 point = curr_pt.point, inter = curr_pt.inter, neighbor = curr_pt.neighbor,
                 ent_exit = status, crossing = curr_pt.crossing, fracs = curr_pt.fracs, endpoint = curr_pt.endpoint,
-                endpoint_partner = curr_pt.endpoint_partner)
+                endpoint_partner = curr_pt.endpoint_partner, first_in_chain = curr_pt.first_in_chain)
             partner_pt = pt_list[curr_pt.endpoint_partner]
             pt_list[curr_pt.endpoint_partner] = PolyNode(;
                 point = partner_pt.point, inter = partner_pt.inter, neighbor = partner_pt.neighbor,
                 ent_exit = status, crossing = partner_pt.crossing, fracs = partner_pt.fracs, endpoint = partner_pt.endpoint,
-                endpoint_partner = partner_pt.endpoint_partner
+                endpoint_partner = partner_pt.endpoint_partner, first_in_chain = partner_pt.first_in_chain
             )
             append!(processed_endpoints, ii)
             append!(processed_endpoints, curr_pt.endpoint_partner)
@@ -455,6 +516,7 @@ function _trace_polynodes(::Type{T}, a_list, b_list, a_idx_list, f_step) where T
     # Determine number of crossing intersection points
     n_cross_pts = 0
     for i in eachindex(a_idx_list)
+        # if a_list[a_idx_list[i]].crossing||a_list[a_idx_list[i]].endpoint
         if a_list[a_idx_list[i]].crossing
             n_cross_pts += 1
         else
@@ -478,13 +540,16 @@ function _trace_polynodes(::Type{T}, a_list, b_list, a_idx_list, f_step) where T
         # Set first point in polygon
         curr = curr_list[idx]
         pt_list = [curr.point]
+        
 
         curr_not_start = true
         while curr_not_start
             step = f_step(curr.ent_exit, on_a_list)
             # changed curr_not_intr to curr_not_same_ent_flag
-            curr_not_crossing = true
-            while curr_not_crossing
+            # TODO update prev_flag in code later
+            prev_flag = curr.ent_exit
+            curr_same_flag = true
+            while curr_same_flag
                 # Traverse polygon either forwards or backwards
                 idx += step
                 idx = (idx > curr_npoints) ? mod(idx, curr_npoints) : idx
@@ -493,7 +558,8 @@ function _trace_polynodes(::Type{T}, a_list, b_list, a_idx_list, f_step) where T
                 # Get current node and add to pt_list
                 curr = curr_list[idx]
                 push!(pt_list, curr.point)
-                if curr.crossing
+                curr_flag = curr.ent_exit
+                if (curr.crossing || curr.endpoint) && curr_flag != prev_flag
                     # Keep track of processed intersection points
                     curr_not_start = curr != start_pt && curr != b_list[start_pt.neighbor]
                     if curr_not_start
@@ -505,7 +571,7 @@ function _trace_polynodes(::Type{T}, a_list, b_list, a_idx_list, f_step) where T
                         end
                         # a_idx_list[curr.idx] = 0
                     end
-                    curr_not_crossing = false
+                    curr_same_flag = false
                 end
             end
 
@@ -514,6 +580,7 @@ function _trace_polynodes(::Type{T}, a_list, b_list, a_idx_list, f_step) where T
             on_a_list = !on_a_list
             idx = curr.neighbor
             curr = curr_list[idx]
+            prev_flag = curr.ent_exit 
         end
         push!(return_polys, GI.Polygon([pt_list]))
     end
