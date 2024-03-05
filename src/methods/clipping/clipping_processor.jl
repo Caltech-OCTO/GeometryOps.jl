@@ -13,6 +13,9 @@ an intersection point (ipt). =#
     ent_exit::Bool = false     # If ipt, true if enter and false if exit, else false
     crossing::Bool = false     # If ipt, true if intersection crosses from out/in polygon, else false
     fracs::Tuple{T,T} = (0., 0.) # If ipt, fractions along edges to ipt (a_frac, b_frac), else (0, 0)
+    endpoint::Bool = false
+    endpoint_partner::Int = 0
+    # bounce_endpoint::Bool = false
 end
 
 #=
@@ -243,22 +246,65 @@ function _classify_crossing!(::Type{T}, a_list, b_list) where T
             elseif !a_next_is_b_prev && !a_next_is_b_next 
                 b_side = a_prev_is_b_prev ? b_next_side : b_prev_side
                 if start_chain_edge == unknown  # start loop on overlapping chain
+                    # saving info about this point, should update polynode down below
                     unmatched_end_chain_edge = b_side
                     unmatched_end_chain_idx = i
                 elseif b_side != start_chain_edge  # close overlapping chain
                     a_list[i] = PolyNode{T}(;
                         point = curr_pt.point, inter = true, neighbor = j,
                         crossing = true, fracs = curr_pt.fracs,
+                        endpoint = true, endpoint_partner = start_chain_idx
                     )
+                    start_pt = a_list[start_chain_idx]
+                    a_list[start_chain_idx] = PolyNode{T}(;
+                        point = start_pt.point, inter = true, neighbor = start_pt.neighbor,
+                        crossing = true, fracs = start_pt.fracs,
+                        endpoint = true, endpoint_partner = i
+                    )
+                    start_b_pt = b_list[start_pt.neighbor]
                     b_list[j] = PolyNode{T}(;
                         point = curr_pt.point, inter = true, neighbor = i,
                         crossing = true, fracs = curr_pt.fracs,
+                        endpoint = true, endpoint_partner = start_pt.neighbor
+                    )
+                    
+                    b_list[start_pt.neighbor] = PolyNode{T}(;
+                        point = start_b_pt.point, inter = true, neighbor = start_chain_idx,
+                        crossing = true, fracs = start_b_pt.fracs,
+                        endpoint = true, endpoint_partner = j
+                    )
+
+                elseif b_side == start_chain_edge
+                    a_list[i] = PolyNode{T}(;
+                        point = curr_pt.point, inter=true, neighbor = j,
+                        crossing = false, fracs = curr_pt.fracs,
+                        endpoint = true, endpoint_partner = start_chain_idx
+                    )
+                    start_pt = a_list[start_chain_idx]
+                    b_list[j] = PolyNode{T}(;
+                        point = curr_pt.point, inter = true, neighbor = i,
+                        crossing = false, fracs = curr_pt.fracs,
+                        endpoint = true, endpoint_partner = start_pt.neighbor
+                    )
+                    a_list[start_chain_idx] = PolyNode{T}(;
+                        point = start_pt.point, inter = true, neighbor = start_pt.neighbor,
+                        crossing = false, fracs = start_pt.fracs,
+                        endpoint = true, endpoint_partner = i
+                    )
+                    start_b_pt = b_list[start_pt.neighbor]
+                    b_list[start_pt.neighbor] = PolyNode{T}(;
+                        point = start_b_pt.point, inter = true, neighbor = start_chain_idx,
+                        crossing = false, fracs = start_b_pt.fracs,
+                        endpoint = true, endpoint_partner = j
                     )
                 end
             # start of overlapping chain
+            # start_chain_idx = unknown
             elseif !a_prev_is_b_prev && !a_prev_is_b_next
                 b_side = a_next_is_b_prev ? b_next_side : b_prev_side
                 start_chain_edge = b_side
+                # have a start_chain_idx (position in a_list)
+                start_chain_idx = i
             end
         end
         a_prev = curr_pt
@@ -266,17 +312,35 @@ function _classify_crossing!(::Type{T}, a_list, b_list) where T
         i = next_idx
     end
     # if we started in the middle of overlapping chain, close chain
+    # if unmatched_end_cahin != start_chain_side, it is the start of delayed crossing
+    # if they are the same, it is the start of a delayed bounce
     if unmatched_end_chain_edge != unknown && unmatched_end_chain_edge != start_chain_edge
         end_chain_pt = a_list[unmatched_end_chain_idx]
         a_list[unmatched_end_chain_idx] = PolyNode{T}(;
             point = end_chain_pt.point, inter = true,
             neighbor = end_chain_pt.neighbor,
             crossing = true, fracs = end_chain_pt.fracs,
+            endpoint = true, endpoint_partner = start_chain_idx
         )
         b_list[end_chain_pt.neighbor] = PolyNode{T}(;
             point = end_chain_pt.point, inter = true,
             neighbor = unmatched_end_chain_idx,
             crossing = true, fracs = end_chain_pt.fracs,
+            endpoint = true, endpoint_partner = a_list[start_chain_idx].neighbor
+        )
+    elseif unmatched_end_chain_edge != unknown && unmatched_end_chain_edge == start_chain_edge
+        end_chain_pt = a_list[unmatched_end_chain_idx]
+        a_list[unmatched_end_chain_idx] = PolyNode{T}(;
+            point = end_chain_pt.point, inter = true,
+            neighbor = end_chain_pt.neighbor,
+            crossing = false, fracs = end_chain_pt.fracs,
+            endpoint = true, endpoint_neighbor = start_chain_idx
+        )
+        b_list[end_chain_pt.neighbor] = PolyNode{T}(;
+            point = end_chain_pt.point, inter = true,
+            neighbor = unmatched_end_chain_idx,
+            crossing = false, fracs = end_chain_pt.fracs,
+            endpoint = true, endpoint_partner = a_list[start_chain_idx].neighbor
         )
     end
 end
@@ -309,7 +373,7 @@ returns false. Used for clipping polygons by other polygons.
 =#
 function _flag_ent_exit!(::GI.LinearRingTrait, poly, pt_list)
     # Find starting index if there is one
-    start_idx = findfirst(x -> x.crossing, pt_list)
+    start_idx = findfirst(x -> x.crossing || x.endpoint, pt_list)
     isnothing(start_idx) && return
     # Determine if non-overlapping line midpoint is inside or outside of polygon
     npts = length(pt_list)
@@ -317,13 +381,32 @@ function _flag_ent_exit!(::GI.LinearRingTrait, poly, pt_list)
     start_pt = (pt_list[start_idx].point .+ pt_list[next_idx].point) ./ 2
     status = !_point_filled_curve_orientation(start_pt, poly; in = true, on = false, out = false)
     # Loop over points and mark entry and exit status
+    processed_endpoints = []
     for ii in Iterators.flatten((next_idx:npts, 1:start_idx))
         curr_pt = pt_list[ii]
-        if curr_pt.crossing
+        if (!curr_pt.crossing && curr_pt.endpoint) || (curr_pt.crossing && !curr_pt.endpoint)
             pt_list[ii] = PolyNode(;
                 point = curr_pt.point, inter = curr_pt.inter, neighbor = curr_pt.neighbor,
-                ent_exit = status, crossing = curr_pt.crossing, fracs = curr_pt.fracs)
+                ent_exit = status, crossing = curr_pt.crossing, fracs = curr_pt.fracs, endpoint = curr_pt.endpoint)
             status = !status
+        elseif curr_pt.crossing && curr_pt.endpoint
+            if ii in processed_endpoints
+                continue
+            end
+            pt_list[ii] = PolyNode(;
+                point = curr_pt.point, inter = curr_pt.inter, neighbor = curr_pt.neighbor,
+                ent_exit = status, crossing = curr_pt.crossing, fracs = curr_pt.fracs, endpoint = curr_pt.endpoint,
+                endpoint_partner = curr_pt.endpoint_partner)
+            partner_pt = pt_list[curr_pt.endpoint_partner]
+            pt_list[curr_pt.endpoint_partner] = PolyNode(;
+                point = partner_pt.point, inter = partner_pt.inter, neighbor = partner_pt.neighbor,
+                ent_exit = status, crossing = partner_pt.crossing, fracs = partner_pt.fracs, endpoint = partner_pt.endpoint,
+                endpoint_partner = partner_pt.endpoint_partner
+            )
+            append!(processed_endpoints, ii)
+            append!(processed_endpoints, curr_pt.endpoint_partner)
+            status = !status
+
         end
     end
     return
