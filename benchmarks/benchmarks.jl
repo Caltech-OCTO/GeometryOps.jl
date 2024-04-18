@@ -68,7 +68,7 @@ We'll start by loading the data, and then we'll use it to benchmark various oper
 =#
 
 # The CRS for this file is EPSG:3005, or as a PROJ string,
-# `"+proj=aea +lat_1=50 +lat_2=58.5 +lat_0=45 +lon_0=-126 +x_0=1000000 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs"`
+# `"+proj=aea +lat_1=50 +lat_2=58.5 +lat_0=45 +lon_0=-126 +x_0=1000000 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m"`
 # TODO: this doesn't work with WellKnownGeometry.  Why?
 wkt_geoms = LG.readgeom.(eachline("/Users/anshul/Downloads/watersheds.wkt"), (LG.WKTReader(LG.get_global_context()),))
 vancouver_polygons = GI.getgeom.(wkt_geoms, 1); #.|> GO.tuples;
@@ -79,12 +79,18 @@ query_result = STR.query(tree, GI.extent(vancouver_polygons[1]))
 
 GO.intersects.((vancouver_polygons[1],), vancouver_polygons[query_result])
 
-go_vp = GO.tuples.(vancouver_polygons[1:2])
-@be GO.union($(go_vp[1]), $(go_vp[2]); target = $GI.PolygonTrait())
-@be LG.union($(vancouver_polygons[1]), $(vancouver_polygons[2]))
+go_vp = GO.tuples.(vancouver_polygons)
+@be GO.union($(go_vp[1]), $(go_vp[2]); target = $GI.PolygonTrait()) seconds=3
+@be LG.union($(vancouver_polygons[1]), $(vancouver_polygons[2])) seconds=3
 
-all_intersected = falses(length(vancouver_polygons))
-accumulator = deepcopy(vancouver_polygons[1])
+go_u = GO.union((go_vp[1]), (go_vp[2]); target = GI.PolygonTrait())[1] 
+lg_u = LG.union((vancouver_polygons[1]), (vancouver_polygons[2]))
+
+GO.equals(go_u, lg_u)
+
+
+all_intersected = falses(length(go_vp))
+accumulator = deepcopy(go_vp[1])
 all_intersected[1] = true
 i = 1
 # query_result = STR.query(tree, GI.extent(accumulator))
@@ -99,20 +105,25 @@ i = 1
 #     end
 # end
 display(poly(vancouver_polygons[all_intersected]; color = rand(RGBf, sum(all_intersected))))
+display(poly(go_vp; color = rand(RGBf, length(go_vp))))
 display(poly(accumulator))
+intersect_states = [deepcopy(all_intersected)]
 @time while !(all(all_intersected)) && i < length(vancouver_polygons)
     println("Began iteration $i")
     query_result = STR.query(tree, GI.extent(accumulator))
     for idx in query_result
-        if !(all_intersected[idx] || !(LG.intersects(vancouver_polygons[idx], accumulator)))
+        if !(all_intersected[idx] || !(GO.intersects(go_vp[idx], accumulator)))
             println("Assimilating $idx")
-            result = LG.union(vancouver_polygons[idx], accumulator#=; target = GI.PolygonTrait()=#)
-            # @show length(result)
-            accumulator = result#[1]
+            result = GO.union(go_vp[idx], accumulator; target = GI.PolygonTrait())
+            lr=length(result)
+            if lr > 1
+                @warn "Result length > 1"
+            end
+            accumulator = result[1]
             all_intersected[idx] = true
         end
     end
-    display(poly(vancouver_polygons[all_intersected]; color = rand(RGBf, sum(all_intersected))))
+    push!(intersect_states, deepcopy(all_intersected))#display(poly(go_vp[all_intersected]; color = rand(RGBf, sum(all_intersected))))
     println("Finished iteration $i")
     # wait_for_key("Press any key to continue to the next iteration.")
     i += 1
